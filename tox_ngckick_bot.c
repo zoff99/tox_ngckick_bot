@@ -264,6 +264,8 @@ static void yieldcpu(uint32_t ms)
 }
 
 
+// -------- Tox related functions --------
+
 static void updateToxSavedata(const Tox *tox)
 {
     size_t size = tox_get_savedata_size(tox);
@@ -275,8 +277,6 @@ static void updateToxSavedata(const Tox *tox)
     rename(savedata_tmp_filename, savedata_filename);
     free(savedata);
 }
-
-
 
 static void self_connection_change_callback(Tox *tox, TOX_CONNECTION status, void *userdata)
 {
@@ -375,7 +375,6 @@ static void group_join_fail_cb(Tox *tox, uint32_t group_number, Tox_Group_Join_F
 
 static void group_moderation_cb(Tox *tox, uint32_t group_number, uint32_t source_peer_id, uint32_t target_peer_id,
                                      Tox_Group_Mod_Event mod_type, void *user_data)
-
 {
     dbg(CLL_INFO, "group moderation event, group %d srcpeer %d tgtpeer %d type %d",
         group_number, source_peer_id, target_peer_id, mod_type);
@@ -389,6 +388,10 @@ static void group_peer_status_cb(Tox *tox, uint32_t group_number, uint32_t peer_
         group_number, peer_id, status);
     updateToxSavedata(tox);
 }
+
+// -------- Tox related functions --------
+
+
 
 int main(int argc, char *argv[])
 {
