@@ -39,8 +39,8 @@
 // ----------- version -----------
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 99
-#define VERSION_PATCH 0
-static const char global_version_string[] = "0.99.0";
+#define VERSION_PATCH 1
+static const char global_version_string[] = "0.99.1";
 // ----------- version -----------
 // ----------- version -----------
 
@@ -63,6 +63,17 @@ enum CUSTOM_LOG_LEVEL {
   CLL_DEBUG = 9,
 };
 
+enum CUSTOM_KICK_LEVEL {
+  KICKLEVEL_INVALID = 0,
+  KICKLEVEL_MUTE = 1,
+  KICKLEVEL_KICK = 2,
+};
+
+struct kick_list_entry {
+    uint8_t kick_level;
+    char peer_pubkey[TOX_GROUP_PEER_PUBLIC_KEY_SIZE];
+};
+
 #define CURRENT_LOG_LEVEL CLL_INFO // 0 -> error, 1 -> warn, 2 -> info, 9 -> debug
 static FILE *logfile = NULL;
 static const char *log_filename = "tox_ngckick_bot.log";
@@ -70,7 +81,7 @@ static const char *savedata_filename = "savedata.tox";
 static const char *savedata_tmp_filename = "savedata.tox.tmp";
 static int self_online = 0;
 static bool main_loop_running = true;
-static uint8_t *kick_pubkeys_list = NULL;
+static struct kick_list_entry *kick_pubkeys_list = NULL;
 static uint16_t kick_pubkeys_list_entries = 0;
 
 
@@ -307,38 +318,85 @@ static void yieldcpu(uint32_t ms)
     usleep(1000 * ms);
 }
 
-static bool add_to_kick_list(const uint8_t *pubkey1_bin)
+static bool del_from_kick_list(const uint8_t *pubkey1_bin)
+{
+    bool ret = false;
+    const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
+    uint8_t *kick_public_key_bin = NULL;
+    struct kick_list_entry* iter = kick_pubkeys_list;
+    for(int i=0;i<kick_pubkeys_list_entries;i++) {
+        kick_public_key_bin = iter->peer_pubkey;
+        if (pubkeys_bin_equal(pubkey1_bin, kick_public_key_bin)) {
+            iter->kick_level = KICKLEVEL_INVALID;
+            ret = true;
+        }
+        iter++;
+    }
+    return ret;
+}
+
+static bool add_to_kick_list(const uint8_t *pubkey1_bin, enum CUSTOM_KICK_LEVEL kick_level)
 {
     if (kick_pubkeys_list) {
-        kick_pubkeys_list = realloc(kick_pubkeys_list, (kick_pubkeys_list_entries + 1) * TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
-        memcpy(kick_pubkeys_list + (kick_pubkeys_list_entries * TOX_GROUP_PEER_PUBLIC_KEY_SIZE), pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
+        kick_pubkeys_list = realloc(kick_pubkeys_list,
+            (kick_pubkeys_list_entries + 1) * sizeof(struct kick_list_entry));
+        struct kick_list_entry* new = kick_pubkeys_list;
+        new = new + kick_pubkeys_list_entries;
+        new->kick_level = kick_level;
+        memcpy(new->peer_pubkey, pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
         kick_pubkeys_list_entries++;
     } else {
-        kick_pubkeys_list = calloc(1, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
-        memcpy(kick_pubkeys_list, pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
+        kick_pubkeys_list = (struct kick_list_entry *)calloc(1, sizeof(struct kick_list_entry));
+        struct kick_list_entry* new = kick_pubkeys_list;
+        new->kick_level = kick_level;
+        memcpy(new->peer_pubkey, pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
         kick_pubkeys_list_entries = 1;
     }
 }
 
-static bool check_for_kick(const uint8_t *pubkey1_bin)
+static enum CUSTOM_KICK_LEVEL check_for_kick(const uint8_t *pubkey1_bin)
 {
+    bool ret = 0;
     const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
     uint8_t *kick_public_key_bin = NULL;
+    struct kick_list_entry* iter = kick_pubkeys_list;
     for(int i=0;i<kick_pubkeys_list_entries;i++) {
-        kick_public_key_bin = kick_pubkeys_list + (i * TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
+        kick_public_key_bin = iter->peer_pubkey;
         if (pubkeys_bin_equal(pubkey1_bin, kick_public_key_bin)) {
-            char tox_ngc_pubkey_hex[pubkey_str_size];
-            bin2upHex(pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
-            dbg(CLL_INFO, "pubkey matches kick list -> kick peer with pubkey: %s\n", tox_ngc_pubkey_hex);
-            return true;
+            if (iter->kick_level == KICKLEVEL_INVALID) {
+                // removed peer, ignore
+            }
+            else if (iter->kick_level == KICKLEVEL_KICK) {
+                char tox_ngc_pubkey_hex[pubkey_str_size];
+                bin2upHex(pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
+                dbg(CLL_INFO, "pubkey matches kick list -> KICK peer with pubkey: %s\n", tox_ngc_pubkey_hex);
+                ret = KICKLEVEL_KICK;
+                // kick found, return to caller
+                return ret;
+            } else if (iter->kick_level == KICKLEVEL_MUTE) {
+                char tox_ngc_pubkey_hex[pubkey_str_size];
+                bin2upHex(pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
+                dbg(CLL_INFO, "pubkey matches kick list -> mute peer with pubkey: %s\n", tox_ngc_pubkey_hex);
+                ret = KICKLEVEL_MUTE;
+                // keep the loop running, to check for same entry with KICK
+            }
         }
+        iter++;
     }
-    return false;
+    return ret;
+}
+
+static bool save_kick_list()
+{
+}
+
+static bool load_kick_list()
+{
 }
 
 // -------- Tox related functions --------
 
-static void updateToxSavedata(const Tox *tox)
+static void update_tox_savedata(const Tox *tox)
 {
     size_t size = tox_get_savedata_size(tox);
     uint8_t *savedata = calloc(1, size);
@@ -386,7 +444,52 @@ static void friendlist_onConnectionChange(Tox *tox, uint32_t friend_number, TOX_
 static void friend_request_cb(Tox *tox, const uint8_t *public_key, const uint8_t *message, size_t length, void *user_data)
 {
     tox_friend_add_norequest(tox, public_key, NULL);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
+}
+
+static void send_kick_list_to_friend(Tox *tox, uint32_t friend_number)
+{
+    const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
+    uint8_t *kick_public_key_bin = NULL;
+    struct kick_list_entry* iter = kick_pubkeys_list;
+    uint16_t valid_entries = 0;
+    for(int i=0;i<kick_pubkeys_list_entries;i++) {
+        if (iter->kick_level != KICKLEVEL_INVALID) {
+            valid_entries++;
+        }
+        iter++;
+    }
+
+    char msg1[300];
+    memset(msg1, 0, 300);
+    snprintf(msg1, 299, "entries: %d", valid_entries);
+    tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg1, strlen(msg1), NULL);
+    // reset iterator
+    iter = kick_pubkeys_list;
+    for(int i=0;i<kick_pubkeys_list_entries;i++) {
+        char tox_ngc_pubkey_hex[pubkey_str_size];
+        bin2upHex(iter->peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
+        if (iter->kick_level == KICKLEVEL_INVALID) {
+            // peer was removed, ignore
+        }
+        else if (iter->kick_level == KICKLEVEL_KICK) {
+            char msg[300];
+            memset(msg, 0, 300);
+            snprintf(msg, 299, "KICK: %s", tox_ngc_pubkey_hex);
+            tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg, strlen(msg), NULL);
+        } else if (iter->kick_level == KICKLEVEL_MUTE) {
+            char msg[300];
+            memset(msg, 0, 300);
+            snprintf(msg, 299, "MUTE: %s", tox_ngc_pubkey_hex);
+            tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg, strlen(msg), NULL);
+        }
+        iter++;
+    }
+}
+
+static void check_for_current_peers(Tox *tox, const uint8_t *pubkey1_bin)
+{
+    // TODO: write me
 }
 
 static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE type, const uint8_t *message,
@@ -402,7 +505,11 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                 memcpy(message2, message, length);
                 dbg(CLL_INFO, "incoming message: fnum=%d text=%s\n", friend_number, message2);
 
-                const char *kick_prefix = ".kick ";
+                const char *kick_prefix  = ".kick ";
+                const char *mute_prefix  = ".mute ";
+                const char *del_prefix   = ".del ";
+                const char *list_command = ".list";
+
                 if (strncmp((char *)message2, kick_prefix,
                              strlen((char *)kick_prefix)) == 0)
                 {
@@ -414,11 +521,54 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                         {
                             dbg(CLL_INFO, "incoming kick request: fnum=%d toxid=%s\n",
                                 friend_number, hex_peer_pubkey_string);
-                            add_to_kick_list(hex_peer_pubkey);
+                            add_to_kick_list(hex_peer_pubkey, KICKLEVEL_KICK);
+                            check_for_current_peers(tox, hex_peer_pubkey);
                             free(hex_peer_pubkey);
                         }
                     }
                 }
+                else if (strncmp((char *)message2, mute_prefix,
+                             strlen((char *)mute_prefix)) == 0)
+                {
+                    if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(mute_prefix)))
+                    {
+                        const char *hex_peer_pubkey_string = (message + strlen(mute_prefix));
+                        uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
+                        if (hex_peer_pubkey)
+                        {
+                            dbg(CLL_INFO, "incoming mute request: fnum=%d toxid=%s\n",
+                                friend_number, hex_peer_pubkey_string);
+                            add_to_kick_list(hex_peer_pubkey, KICKLEVEL_MUTE);
+                            check_for_current_peers(tox, hex_peer_pubkey);
+                            free(hex_peer_pubkey);
+                        }
+                    }
+                }
+                else if (strncmp((char *)message2, del_prefix,
+                             strlen((char *)del_prefix)) == 0)
+                {
+                    if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(del_prefix)))
+                    {
+                        const char *hex_peer_pubkey_string = (message + strlen(del_prefix));
+                        uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
+                        if (hex_peer_pubkey)
+                        {
+                            dbg(CLL_INFO, "incoming del request: fnum=%d toxid=%s\n",
+                                friend_number, hex_peer_pubkey_string);
+                            del_from_kick_list(hex_peer_pubkey);
+                            check_for_current_peers(tox, hex_peer_pubkey);
+                            free(hex_peer_pubkey);
+                        }
+                    }
+                }
+                else if (strncmp((char *)message2, list_command,
+                             strlen((char *)list_command)) == 0)
+                {
+                    dbg(CLL_INFO, "incoming list request: fnum=%d\n");
+                    send_kick_list_to_friend(tox, friend_number);
+                }
+
+
                 free(message2);
             }
         }
@@ -434,7 +584,7 @@ static void group_invite_cb(Tox *tox, uint32_t friend_number, const uint8_t *inv
                                  NULL, 0,
                                  &error);
     dbg(CLL_INFO, "tox_group_invite_accept:%d\n", error);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 }
 
 static void group_self_join_cb(Tox *tox, uint32_t group_number, void *userdata)
@@ -443,23 +593,27 @@ static void group_self_join_cb(Tox *tox, uint32_t group_number, void *userdata)
     tox_group_self_set_name(tox, group_number,
                         (const uint8_t *)"ToxNgckickBot", strlen("ToxNgckickBot"),
                         NULL);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 }
 
 static void group_peer_join_cb(Tox *tox, uint32_t group_number, uint32_t peer_id, void *user_data)
 {
     dbg(CLL_INFO, "Peer %d joined group %d\n", peer_id, group_number);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 
     Tox_Err_Group_Peer_Query error;
     uint8_t peer_public_key_bin[TOX_GROUP_PEER_PUBLIC_KEY_SIZE];
     tox_group_peer_get_public_key(tox, group_number, peer_id, peer_public_key_bin, &error);
     if (error == TOX_ERR_GROUP_PEER_QUERY_OK) {
-        if (check_for_kick(peer_public_key_bin)) {
+        enum CUSTOM_KICK_LEVEL res = check_for_kick(peer_public_key_bin);
+        if (res == KICKLEVEL_KICK) {
             Tox_Err_Group_Mod_Set_Role error_role;
             tox_group_mod_set_role(tox, group_number, peer_id, TOX_GROUP_ROLE_OBSERVER, &error_role);
             Tox_Err_Group_Mod_Kick_Peer error_kick;
             tox_group_mod_kick_peer(tox, group_number, peer_id, &error_kick);
+        } else if (res == KICKLEVEL_MUTE) {
+            Tox_Err_Group_Mod_Set_Role error_role;
+            tox_group_mod_set_role(tox, group_number, peer_id, TOX_GROUP_ROLE_OBSERVER, &error_role);
         }
     }
 }
@@ -487,13 +641,13 @@ static void group_peer_exit_cb(Tox *tox, uint32_t group_number, uint32_t peer_id
         dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_SYNC_ERROR\n", peer_id, group_number, exit_type);
             break;
     }
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 }
 
 static void group_join_fail_cb(Tox *tox, uint32_t group_number, Tox_Group_Join_Fail fail_type, void *user_data)
 {
     dbg(CLL_INFO, "Joining group %d failed. reason: %d\n", group_number, fail_type);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 }
 
 static void group_moderation_cb(Tox *tox, uint32_t group_number, uint32_t source_peer_id, uint32_t target_peer_id,
@@ -501,7 +655,7 @@ static void group_moderation_cb(Tox *tox, uint32_t group_number, uint32_t source
 {
     dbg(CLL_INFO, "group moderation event, group %d srcpeer %d tgtpeer %d type %d\n",
         group_number, source_peer_id, target_peer_id, mod_type);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 }
 
 static void group_peer_status_cb(Tox *tox, uint32_t group_number, uint32_t peer_id, Tox_User_Status status,
@@ -509,21 +663,36 @@ static void group_peer_status_cb(Tox *tox, uint32_t group_number, uint32_t peer_
 {
     dbg(CLL_INFO, "group peer status event, group %d peer %d status %d\n",
         group_number, peer_id, status);
-    updateToxSavedata(tox);
+    update_tox_savedata(tox);
 }
 
-// -------- Tox related functions --------
-
-
-
-int main(int argc, char *argv[])
+static void set_tox_callbacks(Tox *tox)
 {
-    logfile = fopen(log_filename, "wb");
-    setvbuf(logfile, NULL, _IOLBF, 0);
+    // ----- CALLBACKS -----
+#ifdef TOX_HAVE_TOXUTIL
+    tox_utils_callback_self_connection_status(tox, self_connection_change_callback);
+    tox_callback_self_connection_status(tox, tox_utils_self_connection_status_cb);
+    tox_utils_callback_friend_connection_status(tox, friendlist_onConnectionChange);
+    tox_callback_friend_connection_status(tox, tox_utils_friend_connection_status_cb);
+#else
+    tox_callback_self_connection_status(tox, self_connection_change_callback);
+#endif
+    tox_callback_friend_request(tox, friend_request_cb);
+    tox_callback_friend_message(tox, friend_message_cb);
 
-    dbg(CLL_INFO, "-LOGGER-\n");
+    tox_callback_group_invite(tox, group_invite_cb);
+    tox_callback_group_peer_join(tox, group_peer_join_cb);
+    tox_callback_group_self_join(tox, group_self_join_cb);
+    tox_callback_group_peer_exit(tox, group_peer_exit_cb);
+    tox_callback_group_join_fail(tox, group_join_fail_cb);
+    tox_callback_group_moderation(tox, group_moderation_cb);
+    tox_callback_group_peer_status(tox, group_peer_status_cb);
+    // ----- CALLBACKS -----
 
+}
 
+static Tox* create_tox(void)
+{
 
     struct Tox_Options options;
     tox_options_default(&options);
@@ -567,13 +736,32 @@ int main(int argc, char *argv[])
 #endif
     dbg(CLL_INFO, "init Tox res:%d\n", error_tox);
     free(savedata);
-    tox_self_set_name(tox, "ToxNgckickBot", strlen("toxNgckickBot"), NULL);
 
-    updateToxSavedata(tox);
+    return tox;
+}
 
-    kick_pubkeys_list = NULL;
-    kick_pubkeys_list_entries = 0;
+static void bootstrap_tox(Tox *tox)
+{
+    // ----- bootstrap -----
+    dbg(CLL_INFO, "Tox bootstrapping\n");
+    // dummy node to bootstrap
+    tox_bootstrap(tox, "local", 7766, (uint8_t *)"2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1", NULL);
+    for (int i = 0; nodes1[i].ip; i++) {
+        uint8_t *key = (uint8_t *)calloc(1, 100);
+        if (!key) {
+            continue;
+        }
+        hex_string_to_bin2(nodes1[i].key, key);
+        if (nodes1[i].tcp_port != 0) {
+            tox_add_tcp_relay(tox, nodes1[i].ip, nodes1[i].tcp_port, key, NULL);
+        }
+        free(key);
+    }
+    // ----- bootstrap -----
+}
 
+static void print_tox_id(Tox *tox)
+{
     uint8_t tox_id_bin[tox_address_size()];
     tox_self_get_address(tox, tox_id_bin);
     int tox_address_hex_size = tox_address_size() * 2 + 1;
@@ -585,47 +773,27 @@ int main(int argc, char *argv[])
     dbg(CLL_INFO, "ToxID: %s\n", tox_id_hex);
     printf("--------------------\n");
     printf("--------------------\n");
+}
+
+// -------- Tox related functions --------
 
 
 
-    // ----- CALLBACKS -----
-#ifdef TOX_HAVE_TOXUTIL
-    tox_utils_callback_self_connection_status(tox, self_connection_change_callback);
-    tox_callback_self_connection_status(tox, tox_utils_self_connection_status_cb);
-    tox_utils_callback_friend_connection_status(tox, friendlist_onConnectionChange);
-    tox_callback_friend_connection_status(tox, tox_utils_friend_connection_status_cb);
-#else
-    tox_callback_self_connection_status(tox, self_connection_change_callback);
-#endif
-    tox_callback_friend_request(tox, friend_request_cb);
-    tox_callback_friend_message(tox, friend_message_cb);
+int main(int argc, char *argv[])
+{
+    logfile = fopen(log_filename, "wb");
+    setvbuf(logfile, NULL, _IOLBF, 0);
+    dbg(CLL_INFO, "-LOGGER-\n");
 
-    tox_callback_group_invite(tox, group_invite_cb);
-    tox_callback_group_peer_join(tox, group_peer_join_cb);
-    tox_callback_group_self_join(tox, group_self_join_cb);
-    tox_callback_group_peer_exit(tox, group_peer_exit_cb);
-    tox_callback_group_join_fail(tox, group_join_fail_cb);
-    tox_callback_group_moderation(tox, group_moderation_cb);
-    tox_callback_group_peer_status(tox, group_peer_status_cb);
-    // ----- CALLBACKS -----
+    Tox *tox = create_tox();
+    tox_self_set_name(tox, "ToxNgckickBot", strlen("toxNgckickBot"), NULL);
+    update_tox_savedata(tox);
 
-    // ----- bootstrap -----
-    dbg(CLL_INFO, "Tox bootstrapping\n");
-    // dummy node to bootstrap
-    tox_bootstrap(tox, "local", 7766, (uint8_t *)"2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1", NULL);
-    for (int i = 0; nodes1[i].ip; i++) {
-        uint8_t *key = (uint8_t *)calloc(1, 100);
-        hex_string_to_bin2(nodes1[i].key, key);
-        if (!key) {
-            continue;
-        }
-        if (nodes1[i].tcp_port != 0) {
-            tox_add_tcp_relay(tox, nodes1[i].ip, nodes1[i].tcp_port, key, NULL);
-        }
-        free(key);
-    }
-    // ----- bootstrap -----
+    print_tox_id(tox);
+    set_tox_callbacks(tox);
 
+    kick_pubkeys_list = NULL;
+    kick_pubkeys_list_entries = 0;
 
     // ----------- main loop -----------
     main_loop_running = true;
