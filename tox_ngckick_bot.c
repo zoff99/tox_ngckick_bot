@@ -564,7 +564,7 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                 else if (strncmp((char *)message2, list_command,
                              strlen((char *)list_command)) == 0)
                 {
-                    dbg(CLL_INFO, "incoming list request: fnum=%d\n");
+                    dbg(CLL_INFO, "incoming list request: fnum=%d\n", friend_number);
                     send_kick_list_to_friend(tox, friend_number);
                 }
 
