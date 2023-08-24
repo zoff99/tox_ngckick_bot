@@ -28,7 +28,7 @@
 
  linux compile:
 
- gcc -O3 -g -fPIC tox_ngckick_bot.c -fno-omit-frame-pointer -fsanitize=address -static-libasan -Wl,-Bstatic $(pkg-config --cflags --libs libsodium) -Wl,-Bdynamic -pthread -o tox_ngckick_bot
+ gcc -O3 -g -flto -fPIC tox_ngckick_bot.c -fno-omit-frame-pointer -fsanitize=address -static-libasan -Wl,-Bstatic $(pkg-config --cflags --libs libsodium) -Wl,-Bdynamic -pthread -o tox_ngckick_bot
 
 */
 
