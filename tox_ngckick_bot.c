@@ -32,7 +32,6 @@
 
 */
 
-
 #define _GNU_SOURCE
 
 // ----------- version -----------
@@ -277,7 +276,7 @@ static unsigned int char_to_int(char c)
 
 static bool pubkeys_hex_equal(const uint8_t *pubkey1_hex_str, const uint8_t *pubkey2_hex_str)
 {
-    if (strncmp(pubkey1_hex_str, pubkey2_hex_str, (TOX_PUBLIC_KEY_SIZE * 2)) == 0) {
+    if (strncmp((char *)pubkey1_hex_str, (char *)pubkey2_hex_str, (TOX_PUBLIC_KEY_SIZE * 2)) == 0) {
         return true;
     } else {
         return false;
@@ -332,7 +331,7 @@ static bool del_from_kick_list(const uint8_t *pubkey1_bin)
     uint8_t *kick_public_key_bin = NULL;
     struct kick_list_entry* iter = kick_pubkeys_list;
     for(int i=0;i<kick_pubkeys_list_entries;i++) {
-        kick_public_key_bin = iter->peer_pubkey;
+        kick_public_key_bin = (uint8_t *)iter->peer_pubkey;
         if (pubkeys_bin_equal(pubkey1_bin, kick_public_key_bin)) {
             iter->kick_level = KICKLEVEL_INVALID;
             ret = true;
@@ -371,7 +370,7 @@ static enum CUSTOM_KICK_LEVEL check_for_kick(const uint8_t *pubkey1_bin)
     uint8_t *kick_public_key_bin = NULL;
     struct kick_list_entry* iter = kick_pubkeys_list;
     for(int i=0;i<kick_pubkeys_list_entries;i++) {
-        kick_public_key_bin = iter->peer_pubkey;
+        kick_public_key_bin = (uint8_t *)iter->peer_pubkey;
         if (pubkeys_bin_equal(pubkey1_bin, kick_public_key_bin)) {
             if (iter->kick_level == KICKLEVEL_INVALID) {
                 // removed peer, ignore
@@ -478,7 +477,7 @@ static void send_kick_list_to_friend(Tox *tox, uint32_t friend_number)
     iter = kick_pubkeys_list;
     for(int i=0;i<kick_pubkeys_list_entries;i++) {
         char tox_ngc_pubkey_hex[pubkey_str_size];
-        bin2upHex(iter->peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
+        bin2upHex((uint8_t *)iter->peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
         if (iter->kick_level == KICKLEVEL_INVALID) {
             // peer was removed, ignore
         }
@@ -525,7 +524,7 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                 {
                     if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(kick_prefix)))
                     {
-                        const char *hex_peer_pubkey_string = (message + strlen(kick_prefix));
+                        const char *hex_peer_pubkey_string = (const char *)(message + strlen(kick_prefix));
                         uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
                         if (hex_peer_pubkey)
                         {
@@ -542,7 +541,7 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                 {
                     if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(mute_prefix)))
                     {
-                        const char *hex_peer_pubkey_string = (message + strlen(mute_prefix));
+                        const char *hex_peer_pubkey_string = (const char *)(message + strlen(mute_prefix));
                         uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
                         if (hex_peer_pubkey)
                         {
@@ -559,7 +558,7 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                 {
                     if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(del_prefix)))
                     {
-                        const char *hex_peer_pubkey_string = (message + strlen(del_prefix));
+                        const char *hex_peer_pubkey_string = (const char *)(message + strlen(del_prefix));
                         uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
                         if (hex_peer_pubkey)
                         {
@@ -843,7 +842,7 @@ int main(int argc, char *argv[])
     load_kick_list();
 
     Tox *tox = create_tox();
-    tox_self_set_name(tox, "ToxNgckickBot", strlen("ToxNgckickBot"), NULL);
+    tox_self_set_name(tox, (uint8_t *)"ToxNgckickBot", strlen("ToxNgckickBot"), NULL);
     update_tox_savedata(tox);
 
     print_tox_id(tox);
