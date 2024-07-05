@@ -1,7 +1,7 @@
 /**
  *
  * tox_ngckick_bot
- * (C)Zoff <zoff@zoff.cc> in 2023
+ * (C)Zoff <zoff@zoff.cc> in 2023 - 2024
  *
  * https://github.com/zoff99/tox_ngckick_bot
  *
@@ -46,15 +46,17 @@ static const char global_version_string[] = "0.99.1";
 
 #include <ctype.h>
 #include <pthread.h>
+#include <stdarg.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/time.h>
+
 #include <sodium.h>
 
-// define this before including toxcore amalgamation -------
-#define MIN_LOGGER_LEVEL LOGGER_LEVEL_INFO
-// define this before including toxcore amalgamation -------
+#include "tox/tox.h"
+#include "tox/toxutil.h"
 
-// include toxcore amalgamation no ToxAV --------
-#include "toxcore_amalgamation_no_toxav.c"
-// include toxcore amalgamation no ToxAV --------
+#include "sql_tables/gen/csorma_runtime.h"
 
 enum CUSTOM_LOG_LEVEL {
   CLL_ERROR = 0,
@@ -79,11 +81,13 @@ static FILE *logfile = NULL;
 static const char *log_filename = "tox_ngckick_bot.log";
 static const char *savedata_filename = "savedata.tox";
 static const char *savedata_tmp_filename = "savedata.tox.tmp";
+static const char *dbsavedir = "./";
+static const char *dbfilename = "tox_ngckick_bot.db";
 static int self_online = 0;
 static bool main_loop_running = true;
 static struct kick_list_entry *kick_pubkeys_list = NULL;
 static uint16_t kick_pubkeys_list_entries = 0;
-
+OrmaDatabase *o = NULL;
 
 struct Node1 {
     char *ip;
@@ -131,6 +135,9 @@ struct Node1 {
 {"172.104.215.182","DA2BD927E01CD05EBCC2574EBE5BEBB10FF59AE0B2105A7D1E2B40E49BB20239",33445,33445},
     { NULL, NULL, 0, 0 }
 };
+
+static void save_kick_list();
+static void load_kick_list();
 
 void dbg(enum CUSTOM_LOG_LEVEL level, const char *fmt, ...)
 {
@@ -321,7 +328,7 @@ static void yieldcpu(uint32_t ms)
 static bool del_from_kick_list(const uint8_t *pubkey1_bin)
 {
     bool ret = false;
-    const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
+    // const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
     uint8_t *kick_public_key_bin = NULL;
     struct kick_list_entry* iter = kick_pubkeys_list;
     for(int i=0;i<kick_pubkeys_list_entries;i++) {
@@ -332,6 +339,7 @@ static bool del_from_kick_list(const uint8_t *pubkey1_bin)
         }
         iter++;
     }
+    save_kick_list();
     return ret;
 }
 
@@ -352,6 +360,8 @@ static bool add_to_kick_list(const uint8_t *pubkey1_bin, enum CUSTOM_KICK_LEVEL 
         memcpy(new->peer_pubkey, pubkey1_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
         kick_pubkeys_list_entries = 1;
     }
+    save_kick_list();
+    return true;
 }
 
 static enum CUSTOM_KICK_LEVEL check_for_kick(const uint8_t *pubkey1_bin)
@@ -386,11 +396,11 @@ static enum CUSTOM_KICK_LEVEL check_for_kick(const uint8_t *pubkey1_bin)
     return ret;
 }
 
-static bool save_kick_list()
+static void save_kick_list()
 {
 }
 
-static bool load_kick_list()
+static void load_kick_list()
 {
 }
 
@@ -450,7 +460,7 @@ static void friend_request_cb(Tox *tox, const uint8_t *public_key, const uint8_t
 static void send_kick_list_to_friend(Tox *tox, uint32_t friend_number)
 {
     const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
-    uint8_t *kick_public_key_bin = NULL;
+    // uint8_t *kick_public_key_bin = NULL;
     struct kick_list_entry* iter = kick_pubkeys_list;
     uint16_t valid_entries = 0;
     for(int i=0;i<kick_pubkeys_list_entries;i++) {
@@ -778,6 +788,45 @@ static void print_tox_id(Tox *tox)
 // -------- Tox related functions --------
 
 
+static void shutdown_db()
+{
+    dbg(CLL_INFO, "shutting down db");
+    OrmaDatabase_shutdown(o);
+    dbg(CLL_INFO, "shutting db DONE");
+}
+
+static void create_db()
+{
+    dbg(CLL_INFO, "CSORMA version: %s", csorma_get_version());
+    dbg(CLL_INFO, "CSORMA SQLite version: %s", csorma_get_sqlite_version());
+
+    const char *db_dir = dbsavedir;
+    const char *db_filename = dbfilename;
+    o = OrmaDatabase_init((uint8_t*)db_dir, strlen(db_dir), (uint8_t*)db_filename, strlen(db_filename));
+
+    {
+    char *sql2 = "CREATE TABLE IF NOT EXISTS \"Acl\" ("
+    "  \"peer_pubkey\" TEXT,"
+    "  \"type\" INTEGER,"
+    "  PRIMARY KEY(\"peer_pubkey\")"
+    ");"
+    ;
+    dbg(CLL_INFO, "creating table: Acl");
+    CSORMA_GENERIC_RESULT res1 = OrmaDatabase_run_multi_sql(o, (const uint8_t *)sql2);
+    dbg(CLL_INFO, "res1: %d", res1);
+    }
+
+    {
+    char *sql2 = ""
+    "CREATE INDEX IF NOT EXISTS \"index_peer_pubkey_on_Acl\" ON Acl (peer_pubkey);"
+    "CREATE INDEX IF NOT EXISTS \"index_type_on_Acl\" ON Acl (type);"
+    ;
+    dbg(CLL_INFO, "creating indexes");
+    CSORMA_GENERIC_RESULT res1 = OrmaDatabase_run_multi_sql(o, (const uint8_t *)sql2);
+    dbg(CLL_INFO, "res1: %d", res1);
+    }
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -785,8 +834,16 @@ int main(int argc, char *argv[])
     setvbuf(logfile, NULL, _IOLBF, 0);
     dbg(CLL_INFO, "-LOGGER-\n");
 
+    fprintf(stdout, "ToxNgckickBot version: %s\n", global_version_string);
+    dbg(CLL_INFO, "ToxNgckickBot version: %s", global_version_string);
+    dbg(CLL_INFO, "libsodium version: %s", sodium_version_string());
+    dbg(CLL_INFO, "toxcore version: v%d.%d.%d", (int)tox_version_major(), (int)tox_version_minor(), (int)tox_version_patch());
+
+    create_db();
+    load_kick_list();
+
     Tox *tox = create_tox();
-    tox_self_set_name(tox, "ToxNgckickBot", strlen("toxNgckickBot"), NULL);
+    tox_self_set_name(tox, "ToxNgckickBot", strlen("ToxNgckickBot"), NULL);
     update_tox_savedata(tox);
 
     print_tox_id(tox);
@@ -822,6 +879,8 @@ int main(int argc, char *argv[])
         fclose(logfile);
         logfile = NULL;
     }
+
+    shutdown_db();
 
     // HINT: for gprof you need an "exit()" call
     exit(0);
