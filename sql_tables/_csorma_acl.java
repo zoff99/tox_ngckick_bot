@@ -4,5 +4,5 @@ public class acl
     @PrimaryKey
     public String peer_pubkey;
     @Column
-    public int type; // 0 -> mute, 1 -> kick
+    public int type; // KICKLEVEL_INVALID = 0, KICKLEVEL_MUTE = 1, KICKLEVEL_KICK = 2
 }
