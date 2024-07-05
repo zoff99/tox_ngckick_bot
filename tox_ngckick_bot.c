@@ -80,11 +80,21 @@ static int self_online = 0;
 static bool main_loop_running = true;
 OrmaDatabase *o = NULL;
 
+#ifdef UNUSED
+#elif defined(__GNUC__)
+# define UNUSED(x) UNUSED_ ## x __attribute__((unused))
+#elif defined(__LCLINT__)
+# define UNUSED(x) /*@unused@*/ x
+#else
+# define UNUSED(x) x
+#endif
+
+#define CLEAR(x) memset(&(x), 0, sizeof(x))
+
 // -------- 2upper_case --------
-#define TO_UPPER_HEX_CHAR(val) ((val) < 10 ? (val) + '0' : (val) - 10 + 'A')
 #define TO_UPPER_HEX_STRING(hex_buffer, size) do { \
     for (int32_t i = 0; i < (int32_t)size; i++) { \
-        hex_buffer[i] = TO_UPPER_HEX_CHAR(hex_buffer[i]); \
+        hex_buffer[i] = toupper(hex_buffer[i]); \
     } \
 } while(0)
 
@@ -233,6 +243,20 @@ static void tox_log_cb__custom(Tox *tox, TOX_LOG_LEVEL level, const char *file, 
     dbg(toxcore_wrapped_level, "TOX:%d:%d:%s:%s\n", (int)level, (int)line, func, message);
 }
 
+int hex_string_to_bin_len(const char *hex_string, size_t hex_len, char *output, size_t output_size)
+{
+    if (output_size == 0 || hex_len != output_size * 2) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < output_size; ++i) {
+        sscanf(hex_string, "%2hhx", (unsigned char *) &output[i]);
+        hex_string += 2;
+    }
+
+    return 0;
+}
+
 /**
  * @brief Converts a hexadecimal string to binary format
  *
@@ -284,17 +308,6 @@ static bool pubkeys_bin_equal(const uint8_t *pubkey1_bin, const uint8_t *pubkey2
     return (memcmp(pubkey1_bin, pubkey2_bin, TOX_PUBLIC_KEY_SIZE) == 0);
 }
 
-static uint8_t *hex_string_to_bin(const char *hex_string)
-{
-    size_t len = TOX_ADDRESS_SIZE;
-    uint8_t *val = calloc(1, len);
-    for (size_t i = 0; i != len; ++i)
-    {
-        val[i] = (16 * char_to_int(hex_string[2 * i])) + (char_to_int(hex_string[2 * i + 1]));
-    }
-    return val;
-}
-
 /**
  * @brief Converts binary data to uppercase hexadecimal string using libsodium
  *
@@ -325,10 +338,10 @@ static bool del_from_kick_list(const char *pubkey1_upper_hex)
 {
     Acl *p = orma_deleteFromAcl(o->db);
     int64_t affected_rows2 = p->peer_pubkeyEq(p, csb(pubkey1_upper_hex))->execute(p);
-    dbg(CLL_DEBUG, "orma_deleteFromAcl: affected rows: %d\n", (int)affected_rows2);
+    dbg(CLL_INFO, "orma_deleteFromAcl: affected rows: %d\n", (int)affected_rows2);
     if (affected_rows2 > 0)
     {
-        dbg(CLL_INFO, "deleted peer");
+        dbg(CLL_INFO, "deleted peer\n");
     }
     return true;
 }
@@ -337,7 +350,10 @@ static bool add_to_kick_list(const char *pubkey1_upper_hex, enum CUSTOM_KICK_LEV
 {
     {
     Acl *p = orma_updateAcl(o->db);
-    int64_t affected_rows3 = p->peer_pubkeySet(p, csc(pubkey1_upper_hex, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2)))->execute(p);
+    int64_t affected_rows3 = p
+            ->peer_pubkeyEq(p, csc(pubkey1_upper_hex, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2)))
+            ->typeSet(p, kick_level)
+            ->execute(p);
     if (affected_rows3 < 1)
     {
         {
@@ -347,18 +363,18 @@ static bool add_to_kick_list(const char *pubkey1_upper_hex, enum CUSTOM_KICK_LEV
         int64_t inserted_id = orma_insertIntoAcl(p);
         if (inserted_id < 0)
         {
-            dbg(CLL_ERROR, "inserting peer failed");
+            dbg(CLL_ERROR, "inserting peer failed\n");
         }
         else
         {
-            dbg(CLL_INFO, "inserted peer: %lld", (long long)inserted_id);
+            dbg(CLL_INFO, "inserted peer: %lld\n", (long long)inserted_id);
         }
         orma_free_Acl(p);
         }
     }
     else
     {
-        dbg(CLL_INFO, "updated peer: %lld", (long long)affected_rows3);
+        dbg(CLL_INFO, "updated peer: %lld\n", (long long)affected_rows3);
     }
     }
     return true;
@@ -379,12 +395,8 @@ static enum CUSTOM_KICK_LEVEL check_for_kick(const uint8_t *pubkey1_bin)
         ret = (*acl_item)->type;
         if (ret == KICKLEVEL_KICK) {
             dbg(CLL_INFO, "pubkey matches kick list -> KICK peer with pubkey: %s\n", tox_ngc_pubkey_hex);
-            ret = KICKLEVEL_KICK;
         } else if (ret == KICKLEVEL_MUTE) {
             dbg(CLL_INFO, "pubkey matches kick list -> mute peer with pubkey: %s\n", tox_ngc_pubkey_hex);
-            ret = KICKLEVEL_MUTE;
-            // keep the loop running, to check for same entry with KICK
-            //    --> is not possible anymore since peerpubkey is the primary key in the DB
         }
         acl_item++;
     }
@@ -445,54 +457,35 @@ static void friend_request_cb(Tox *tox, const uint8_t *public_key, const uint8_t
     update_tox_savedata(tox);
 }
 
-static void send_kick_list_to_friend(Tox *tox, uint32_t friend_number)
-{
-
-// TODO: write me
-
-#if 0
-    const int pubkey_str_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + 1;
-    // uint8_t *kick_public_key_bin = NULL;
-    struct kick_list_entry* iter = kick_pubkeys_list;
-    uint16_t valid_entries = 0;
-    for(int i=0;i<kick_pubkeys_list_entries;i++) {
-        if (iter->kick_level != KICKLEVEL_INVALID) {
-            valid_entries++;
-        }
-        iter++;
-    }
-
-    char msg1[300];
-    memset(msg1, 0, 300);
-    snprintf(msg1, 299, "entries: %d", valid_entries);
-    tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg1, strlen(msg1), NULL);
-    // reset iterator
-    iter = kick_pubkeys_list;
-    for(int i=0;i<kick_pubkeys_list_entries;i++) {
-        char tox_ngc_pubkey_hex[pubkey_str_size];
-        bin2upHex((uint8_t *)iter->peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE, tox_ngc_pubkey_hex, pubkey_str_size);
-        if (iter->kick_level == KICKLEVEL_INVALID) {
-            // peer was removed, ignore
-        }
-        else if (iter->kick_level == KICKLEVEL_KICK) {
-            char msg[300];
-            memset(msg, 0, 300);
-            snprintf(msg, 299, "KICK: %s", tox_ngc_pubkey_hex);
-            tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg, strlen(msg), NULL);
-        } else if (iter->kick_level == KICKLEVEL_MUTE) {
-            char msg[300];
-            memset(msg, 0, 300);
-            snprintf(msg, 299, "MUTE: %s", tox_ngc_pubkey_hex);
-            tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg, strlen(msg), NULL);
-        }
-        iter++;
-    }
-#endif
-}
-
 static void check_for_current_peers(Tox *tox, const uint8_t *pubkey1_bin)
 {
     // TODO: write me
+    // apply current kicks / mutes to already online peers here
+}
+
+
+static void send_kick_list_to_friend(Tox *tox, uint32_t friend_number)
+{
+    Acl *s2 = orma_selectFromAcl(o->db);
+    AclList *list = s2->orderBytypeAsc(s2)->orderBypeer_pubkeyAsc(s2)->toList(s2);
+    Acl **acl_item = list->l;
+    for(int i=0;i<list->items;i++)
+    {
+        int32_t acl_type = (*acl_item)->type;
+        if (acl_type == KICKLEVEL_KICK) {
+            char msg[300];
+            memset(msg, 0, 300);
+            snprintf(msg, 299, ".kick %s", (*acl_item)->peer_pubkey->s);
+            tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg, strlen(msg), NULL);
+        } else if (acl_type == KICKLEVEL_MUTE) {
+            char msg[300];
+            memset(msg, 0, 300);
+            snprintf(msg, 299, ".mute %s", (*acl_item)->peer_pubkey->s);
+            tox_friend_send_message(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, (uint8_t *)msg, strlen(msg), NULL);
+        }
+        acl_item++;
+    }
+    orma_free_AclList(list);
 }
 
 static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE type, const uint8_t *message,
@@ -506,7 +499,7 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
             if (message2)
             {
                 memcpy(message2, message, length);
-                dbg(CLL_INFO, "incoming message: fnum=%d text=%s\n", friend_number, message2);
+                dbg(CLL_DEBUG, "incoming message: fnum=%d text=%s\n", friend_number, message2);
 
                 const char *kick_prefix  = ".kick ";
                 const char *mute_prefix  = ".mute ";
@@ -519,9 +512,11 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                     if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(kick_prefix)))
                     {
                         char *hex_peer_pubkey_string = (char *)(message2 + strlen(kick_prefix));
-                        uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
+                        uint8_t *hex_peer_pubkey = calloc(1, TOX_GROUP_PEER_PUBLIC_KEY_SIZE + 1);
                         if (hex_peer_pubkey)
                         {
+                            hex_string_to_bin_len(hex_peer_pubkey_string, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2),
+                                (char *)hex_peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
                             TO_UPPER_HEX_STRING(hex_peer_pubkey_string, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2));
                             dbg(CLL_INFO, "incoming kick request: fnum=%d toxid=%s\n",
                                 friend_number, hex_peer_pubkey_string);
@@ -537,9 +532,11 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                     if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(mute_prefix)))
                     {
                         char *hex_peer_pubkey_string = (char *)(message2 + strlen(mute_prefix));
-                        uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
+                        uint8_t *hex_peer_pubkey = calloc(1, TOX_GROUP_PEER_PUBLIC_KEY_SIZE + 1);
                         if (hex_peer_pubkey)
                         {
+                            hex_string_to_bin_len(hex_peer_pubkey_string, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2),
+                                (char *)hex_peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
                             TO_UPPER_HEX_STRING(hex_peer_pubkey_string, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2));
                             dbg(CLL_INFO, "incoming mute request: fnum=%d toxid=%s\n",
                                 friend_number, hex_peer_pubkey_string);
@@ -555,9 +552,11 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
                     if (strlen(message2) == ((TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2) + strlen(del_prefix)))
                     {
                         char *hex_peer_pubkey_string = (char *)(message2 + strlen(del_prefix));
-                        uint8_t *hex_peer_pubkey = hex_string_to_bin(hex_peer_pubkey_string);
+                        uint8_t *hex_peer_pubkey = calloc(1, TOX_GROUP_PEER_PUBLIC_KEY_SIZE + 1);
                         if (hex_peer_pubkey)
                         {
+                            hex_string_to_bin_len(hex_peer_pubkey_string, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2),
+                                (char *)hex_peer_pubkey, TOX_GROUP_PEER_PUBLIC_KEY_SIZE);
                             TO_UPPER_HEX_STRING(hex_peer_pubkey_string, (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2));
                             dbg(CLL_INFO, "incoming del request: fnum=%d toxid=%s\n",
                                 friend_number, hex_peer_pubkey_string);
@@ -579,6 +578,37 @@ static void friend_message_cb(Tox *tox, uint32_t friend_number, TOX_MESSAGE_TYPE
             }
         }
     }
+}
+
+void friend_message_v2_cb(Tox *tox, uint32_t friend_number, const uint8_t *raw_message, size_t raw_message_len)
+{
+#ifdef TOX_HAVE_TOXUTIL
+    dbg(CLL_DEBUG, "enter friend_message_v2_cb\n");
+
+    // now get the real data from msgV2 buffer
+    uint8_t *message_text = calloc(1, raw_message_len);
+    if (message_text) {
+        uint32_t text_length = 0;
+        bool UNUSED(res) = tox_messagev2_get_message_text(raw_message, (uint32_t) raw_message_len, (bool) false, (uint32_t) 0,
+                   message_text, &text_length);
+
+        friend_message_cb(tox, friend_number, TOX_MESSAGE_TYPE_NORMAL, message_text, text_length, NULL);
+
+        if (raw_message_len >= TOX_PUBLIC_KEY_SIZE)
+        {
+            uint8_t *msgid_acked = calloc(1, TOX_PUBLIC_KEY_SIZE);
+            memcpy(msgid_acked, raw_message, TOX_PUBLIC_KEY_SIZE);
+            const int tox_public_key_hex_size = (TOX_PUBLIC_KEY_SIZE * 2);
+            char msgid_acked_str[tox_public_key_hex_size + 1];
+            CLEAR(msgid_acked_str);
+            bin2upHex(msgid_acked, TOX_PUBLIC_KEY_SIZE, msgid_acked_str, (tox_public_key_hex_size + 1));
+            dbg(CLL_DEBUG, "friend_message_v2_cb:msgid_acked=%s\n", msgid_acked_str);
+            tox_util_friend_send_msg_receipt_v2(tox, friend_number, msgid_acked, 0);
+        }
+
+        free(message_text);
+    }
+#endif
 }
 
 static void group_invite_cb(Tox *tox, uint32_t friend_number, const uint8_t *invite_data, size_t length,
@@ -604,7 +634,7 @@ static void group_self_join_cb(Tox *tox, uint32_t group_number, void *userdata)
 
 static void group_peer_join_cb(Tox *tox, uint32_t group_number, uint32_t peer_id, void *user_data)
 {
-    dbg(CLL_INFO, "Peer %d joined group %d\n", peer_id, group_number);
+    dbg(CLL_DEBUG, "Peer %d joined group %d\n", peer_id, group_number);
     update_tox_savedata(tox);
 
     Tox_Err_Group_Peer_Query error;
@@ -629,22 +659,22 @@ static void group_peer_exit_cb(Tox *tox, uint32_t group_number, uint32_t peer_id
 {
     switch (exit_type) {
         case TOX_GROUP_EXIT_TYPE_QUIT:
-        dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_QUIT\n", peer_id, group_number, exit_type);
+        dbg(CLL_DEBUG, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_QUIT\n", peer_id, group_number, exit_type);
             break;
         case TOX_GROUP_EXIT_TYPE_TIMEOUT:
-        dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_TIMEOUT\n", peer_id, group_number, exit_type);
+        dbg(CLL_DEBUG, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_TIMEOUT\n", peer_id, group_number, exit_type);
             break;
         case TOX_GROUP_EXIT_TYPE_DISCONNECTED:
-        dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_DISCONNECTED\n", peer_id, group_number, exit_type);
+        dbg(CLL_DEBUG, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_DISCONNECTED\n", peer_id, group_number, exit_type);
             break;
         case TOX_GROUP_EXIT_TYPE_SELF_DISCONNECTED:
-        dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_SELF_DISCONNECTED\n", peer_id, group_number, exit_type);
+        dbg(CLL_DEBUG, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_SELF_DISCONNECTED\n", peer_id, group_number, exit_type);
             break;
         case TOX_GROUP_EXIT_TYPE_KICK:
-        dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_KICK\n", peer_id, group_number, exit_type);
+        dbg(CLL_DEBUG, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_KICK\n", peer_id, group_number, exit_type);
             break;
         case TOX_GROUP_EXIT_TYPE_SYNC_ERROR:
-        dbg(CLL_INFO, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_SYNC_ERROR\n", peer_id, group_number, exit_type);
+        dbg(CLL_DEBUG, "Peer %d left group %d reason: %d TOX_GROUP_EXIT_TYPE_SYNC_ERROR\n", peer_id, group_number, exit_type);
             break;
     }
     update_tox_savedata(tox);
@@ -659,7 +689,7 @@ static void group_join_fail_cb(Tox *tox, uint32_t group_number, Tox_Group_Join_F
 static void group_moderation_cb(Tox *tox, uint32_t group_number, uint32_t source_peer_id, uint32_t target_peer_id,
                                      Tox_Group_Mod_Event mod_type, void *user_data)
 {
-    dbg(CLL_INFO, "group moderation event, group %d srcpeer %d tgtpeer %d type %d\n",
+    dbg(CLL_DEBUG, "group moderation event, group %d srcpeer %d tgtpeer %d type %d\n",
         group_number, source_peer_id, target_peer_id, mod_type);
     update_tox_savedata(tox);
 }
@@ -667,7 +697,7 @@ static void group_moderation_cb(Tox *tox, uint32_t group_number, uint32_t source
 static void group_peer_status_cb(Tox *tox, uint32_t group_number, uint32_t peer_id, Tox_User_Status status,
                                       void *user_data)
 {
-    dbg(CLL_INFO, "group peer status event, group %d peer %d status %d\n",
+    dbg(CLL_DEBUG, "group peer status event, group %d peer %d status %d\n",
         group_number, peer_id, status);
     update_tox_savedata(tox);
 }
@@ -680,6 +710,14 @@ static void set_tox_callbacks(Tox *tox)
     tox_callback_self_connection_status(tox, tox_utils_self_connection_status_cb);
     tox_utils_callback_friend_connection_status(tox, friendlist_onConnectionChange);
     tox_callback_friend_connection_status(tox, tox_utils_friend_connection_status_cb);
+    //
+    tox_callback_friend_lossless_packet(tox, tox_utils_friend_lossless_packet_cb);
+    tox_callback_file_recv_control(tox, tox_utils_file_recv_control_cb);
+    tox_callback_file_chunk_request(tox, tox_utils_file_chunk_request_cb);
+    tox_callback_file_recv(tox, tox_utils_file_recv_cb);
+    tox_callback_file_recv_chunk(tox, tox_utils_file_recv_chunk_cb);
+    //
+    tox_utils_callback_friend_message_v2(tox, friend_message_v2_cb);
 #else
     tox_callback_self_connection_status(tox, self_connection_change_callback);
 #endif
@@ -786,15 +824,15 @@ static void print_tox_id(Tox *tox)
 
 static void shutdown_db()
 {
-    dbg(CLL_INFO, "shutting down db");
+    dbg(CLL_INFO, "shutting down db\n");
     OrmaDatabase_shutdown(o);
-    dbg(CLL_INFO, "shutting db DONE");
+    dbg(CLL_INFO, "shutting db DONE\n");
 }
 
 static void create_db()
 {
-    dbg(CLL_INFO, "CSORMA version: %s", csorma_get_version());
-    dbg(CLL_INFO, "CSORMA SQLite version: %s", csorma_get_sqlite_version());
+    dbg(CLL_INFO, "CSORMA version: %s\n", csorma_get_version());
+    dbg(CLL_INFO, "CSORMA SQLite version: %s\n", csorma_get_sqlite_version());
 
     const char *db_dir = dbsavedir;
     const char *db_filename = dbfilename;
@@ -807,9 +845,9 @@ static void create_db()
     "  PRIMARY KEY(\"peer_pubkey\")"
     ");"
     ;
-    dbg(CLL_INFO, "creating table: Acl");
+    dbg(CLL_INFO, "creating table: Acl\n");
     CSORMA_GENERIC_RESULT res1 = OrmaDatabase_run_multi_sql(o, (const uint8_t *)sql2);
-    dbg(CLL_INFO, "res1: %d", res1);
+    dbg(CLL_INFO, "res1: %d\n", res1);
     }
 
     {
@@ -817,9 +855,9 @@ static void create_db()
     "CREATE INDEX IF NOT EXISTS \"index_peer_pubkey_on_Acl\" ON Acl (peer_pubkey);"
     "CREATE INDEX IF NOT EXISTS \"index_type_on_Acl\" ON Acl (type);"
     ;
-    dbg(CLL_INFO, "creating indexes");
+    dbg(CLL_INFO, "creating indexes\n");
     CSORMA_GENERIC_RESULT res1 = OrmaDatabase_run_multi_sql(o, (const uint8_t *)sql2);
-    dbg(CLL_INFO, "res1: %d", res1);
+    dbg(CLL_INFO, "res1: %d\n", res1);
     }
 }
 
@@ -831,9 +869,9 @@ int main(int argc, char *argv[])
     dbg(CLL_INFO, "-LOGGER-\n");
 
     fprintf(stdout, "ToxNgckickBot version: %s\n", global_version_string);
-    dbg(CLL_INFO, "ToxNgckickBot version: %s", global_version_string);
-    dbg(CLL_INFO, "libsodium version: %s", sodium_version_string());
-    dbg(CLL_INFO, "toxcore version: v%d.%d.%d", (int)tox_version_major(), (int)tox_version_minor(), (int)tox_version_patch());
+    dbg(CLL_INFO, "ToxNgckickBot version: %s\n", global_version_string);
+    dbg(CLL_INFO, "libsodium version: %s\n", sodium_version_string());
+    dbg(CLL_INFO, "toxcore version: v%d.%d.%d\n", (int)tox_version_major(), (int)tox_version_minor(), (int)tox_version_patch());
 
     create_db();
 
