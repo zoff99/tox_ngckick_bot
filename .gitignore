@@ -2,3 +2,10 @@ tox_ngckick_bot
 tox_ngckick_bot.log
 savedata.tox
 savedata.tox__backup
+sqlite3.a
+sqlite3.o
+toxcore_amalgamation.a
+toxcore_amalgamation.o
+sql_tables/gen/
+db/
+tox_ngckick_bot.db
