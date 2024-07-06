@@ -9,3 +9,4 @@ toxcore_amalgamation.o
 sql_tables/gen/
 db/
 tox_ngckick_bot.db
+savedata.tox___bot_save
