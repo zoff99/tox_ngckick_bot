@@ -37,8 +37,8 @@
 // ----------- version -----------
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 99
-#define VERSION_PATCH 2
-static const char global_version_string[] = "0.99.2";
+#define VERSION_PATCH 3
+static const char global_version_string[] = "0.99.3";
 // ----------- version -----------
 // ----------- version -----------
 
@@ -702,6 +702,45 @@ static void group_peer_status_cb(Tox *tox, uint32_t group_number, uint32_t peer_
     update_tox_savedata(tox);
 }
 
+static void group_message_cb(Tox *tox, uint32_t groupnumber, uint32_t peer_number, TOX_MESSAGE_TYPE type,
+                                   const uint8_t *message, size_t length, uint32_t message_id, void *userdata)
+{
+    uint8_t public_key_bin[TOX_GROUP_PEER_PUBLIC_KEY_SIZE];
+    CLEAR(public_key_bin);
+    Tox_Err_Group_Peer_Query error;
+    bool UNUSED(res) = tox_group_peer_get_public_key(tox, groupnumber, peer_number, public_key_bin, &error);
+
+    const int tox_public_key_hex_size = (TOX_GROUP_PEER_PUBLIC_KEY_SIZE * 2);
+    char hex_peer_pubkey_string[tox_public_key_hex_size + 1];
+    CLEAR(hex_peer_pubkey_string);
+
+    if (length >= strlen("youtube"))
+    {
+        Tox_Err_Group_Peer_Query err1;
+        Tox_Group_Role peer_role = tox_group_peer_get_role(tox, groupnumber, peer_number, &err1);
+        if ((peer_role != TOX_GROUP_ROLE_FOUNDER) && (peer_role != TOX_GROUP_ROLE_MODERATOR))
+        {
+            if (strcasestr((const char *)message, "youtube") != NULL)
+            {
+                bin2upHex(public_key_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE,
+                    hex_peer_pubkey_string, (tox_public_key_hex_size + 1));
+
+                dbg(CLL_INFO, "youtube -> insta mute and kick of pubkey: %s\n", hex_peer_pubkey_string);
+
+                // and add to the mute list in the DB
+                add_to_kick_list(hex_peer_pubkey_string, KICKLEVEL_MUTE);
+
+                // mute right now
+                Tox_Err_Group_Mod_Set_Role error_role;
+                tox_group_mod_set_role(tox, groupnumber, peer_number, TOX_GROUP_ROLE_OBSERVER, &error_role);
+
+                Tox_Err_Group_Mod_Kick_Peer error_kick;
+                tox_group_mod_kick_peer(tox, groupnumber, peer_number, &error_kick);
+            }
+        }
+    }
+}
+
 static void set_tox_callbacks(Tox *tox)
 {
     // ----- CALLBACKS -----
@@ -731,6 +770,7 @@ static void set_tox_callbacks(Tox *tox)
     tox_callback_group_join_fail(tox, group_join_fail_cb);
     tox_callback_group_moderation(tox, group_moderation_cb);
     tox_callback_group_peer_status(tox, group_peer_status_cb);
+    tox_callback_group_message(tox, group_message_cb);
     // ----- CALLBACKS -----
 
 }
