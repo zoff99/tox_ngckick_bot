@@ -748,7 +748,7 @@ static void group_message_cb(Tox *tox, uint32_t groupnumber, uint32_t peer_numbe
                     // mute right now
                     Tox_Err_Group_Mod_Set_Role error_role;
                     tox_group_mod_set_role(tox, groupnumber, peer_number, TOX_GROUP_ROLE_OBSERVER, &error_role);
-
+                    // and also kick
                     Tox_Err_Group_Mod_Kick_Peer error_kick;
                     tox_group_mod_kick_peer(tox, groupnumber, peer_number, &error_kick);
                 }
