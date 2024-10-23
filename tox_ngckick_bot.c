@@ -720,7 +720,13 @@ static void group_message_cb(Tox *tox, uint32_t groupnumber, uint32_t peer_numbe
         Tox_Group_Role peer_role = tox_group_peer_get_role(tox, groupnumber, peer_number, &err1);
         if ((peer_role != TOX_GROUP_ROLE_FOUNDER) && (peer_role != TOX_GROUP_ROLE_MODERATOR))
         {
-            if (strcasestr((const char *)message, "youtube") != NULL)
+            char *message2 = calloc(1, length + 1);
+            if (message2 == NULL) {
+                return;
+            }
+            memcpy(message2, message, length);
+
+            if (strcasestr((const char *)message2, "youtube") != NULL)
             {
                 bin2upHex(public_key_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE,
                     hex_peer_pubkey_string, (tox_public_key_hex_size + 1));
@@ -737,6 +743,7 @@ static void group_message_cb(Tox *tox, uint32_t groupnumber, uint32_t peer_numbe
                 Tox_Err_Group_Mod_Kick_Peer error_kick;
                 tox_group_mod_kick_peer(tox, groupnumber, peer_number, &error_kick);
             }
+            free(message2);
         }
     }
 }
