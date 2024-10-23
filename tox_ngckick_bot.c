@@ -33,12 +33,14 @@
 
 #define _GNU_SOURCE
 
+#include <stdint.h>
+
 // ----------- version -----------
 // ----------- version -----------
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 99
-#define VERSION_PATCH 3
-static const char global_version_string[] = "0.99.3";
+#define VERSION_PATCH 4
+static const char global_version_string[] = "0.99.4";
 // ----------- version -----------
 // ----------- version -----------
 
@@ -79,6 +81,9 @@ static const char *dbfilename = "tox_ngckick_bot.db";
 static int self_online = 0;
 static bool main_loop_running = true;
 OrmaDatabase *o = NULL;
+
+// if any message contains these, its insta mute and kick
+const char *bad_strings[] = {"youtube", "ipfs.io"};
 
 #ifdef UNUSED
 #elif defined(__GNUC__)
@@ -714,35 +719,41 @@ static void group_message_cb(Tox *tox, uint32_t groupnumber, uint32_t peer_numbe
     char hex_peer_pubkey_string[tox_public_key_hex_size + 1];
     CLEAR(hex_peer_pubkey_string);
 
-    if (length >= strlen("youtube"))
+    Tox_Err_Group_Peer_Query err1;
+    Tox_Group_Role peer_role = tox_group_peer_get_role(tox, groupnumber, peer_number, &err1);
+    if ((peer_role != TOX_GROUP_ROLE_FOUNDER) && (peer_role != TOX_GROUP_ROLE_MODERATOR))
     {
-        Tox_Err_Group_Peer_Query err1;
-        Tox_Group_Role peer_role = tox_group_peer_get_role(tox, groupnumber, peer_number, &err1);
-        if ((peer_role != TOX_GROUP_ROLE_FOUNDER) && (peer_role != TOX_GROUP_ROLE_MODERATOR))
+        if (length > 0)
         {
             char *message2 = calloc(1, length + 1);
-            if (message2 == NULL) {
+            if (message2 == NULL)
+            {
                 return;
             }
             memcpy(message2, message, length);
 
-            if (strcasestr((const char *)message2, "youtube") != NULL)
+            const uint32_t num_checks = sizeof(bad_strings) / sizeof(bad_strings[0]);
+            for (uint32_t i = 0; i < num_checks; i++)
             {
-                bin2upHex(public_key_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE,
-                    hex_peer_pubkey_string, (tox_public_key_hex_size + 1));
+                if (strcasestr((const char *)message2, bad_strings[i]) != NULL)
+                {
+                    bin2upHex(public_key_bin, TOX_GROUP_PEER_PUBLIC_KEY_SIZE,
+                        hex_peer_pubkey_string, (tox_public_key_hex_size + 1));
 
-                dbg(CLL_INFO, "youtube -> insta mute and kick of pubkey: %s\n", hex_peer_pubkey_string);
+                    dbg(CLL_INFO, "message contains: \"%s\" -> insta mute and kick of pubkey: %s\n", bad_strings[i], hex_peer_pubkey_string);
 
-                // and add to the mute list in the DB
-                add_to_kick_list(hex_peer_pubkey_string, KICKLEVEL_MUTE);
+                    // and add to the mute list in the DB
+                    add_to_kick_list(hex_peer_pubkey_string, KICKLEVEL_MUTE);
 
-                // mute right now
-                Tox_Err_Group_Mod_Set_Role error_role;
-                tox_group_mod_set_role(tox, groupnumber, peer_number, TOX_GROUP_ROLE_OBSERVER, &error_role);
+                    // mute right now
+                    Tox_Err_Group_Mod_Set_Role error_role;
+                    tox_group_mod_set_role(tox, groupnumber, peer_number, TOX_GROUP_ROLE_OBSERVER, &error_role);
 
-                Tox_Err_Group_Mod_Kick_Peer error_kick;
-                tox_group_mod_kick_peer(tox, groupnumber, peer_number, &error_kick);
+                    Tox_Err_Group_Mod_Kick_Peer error_kick;
+                    tox_group_mod_kick_peer(tox, groupnumber, peer_number, &error_kick);
+                }
             }
+
             free(message2);
         }
     }
