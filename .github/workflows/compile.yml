@@ -8,7 +8,7 @@ jobs:
   update-nightly-tag:
     name: Update nightly release tag
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/zoff99/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
         contents: write
     steps:
@@ -59,7 +59,7 @@ jobs:
           ls -hal tox_ngckick_bot
 
       - name: Rename artifact for nightly upload
-        if: github.event_name == 'push' && github.ref == 'refs/heads/zoff99/master'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: |
           cp -v ./tox_ngckick_bot tox_ngckick_bot_linux_nightly
 
@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload to nightly release
         uses: ncipollo/release-action@v1
-        if: github.event_name == 'push' && github.ref == 'refs/heads/zoff99/master'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         with:
           allowUpdates: true
           tag: nightly
