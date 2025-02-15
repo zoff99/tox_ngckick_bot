@@ -18,7 +18,7 @@ ifeq ($(findstring mingw, $(ccmachine)), mingw)
 endif
 
 CFLAGS += -g -O3 -fPIC -I./
-LIBS = $(shell pkg-config --cflags --libs libsodium) -pthread
+LIBS = -Wl,-Bstatic $(shell pkg-config --cflags --libs libsodium) -Wl,-Bdynamic -pthread
 TP_CFLAGS = -Wall -Wextra -std=c99 -pedantic
 # -Wno-unused-parameter
 LIBSSQLITE3 = -lm
