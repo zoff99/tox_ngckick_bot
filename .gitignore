@@ -10,3 +10,8 @@ sql_tables/gen/
 db/
 tox_ngckick_bot.db
 savedata.tox___bot_save
+kick_loop.sh
+savedata.tox__backup*
+tox_ngckick_bot.db__backup*
+tox_ngckick_bot.out
+tox_ngckick_bot_______001_works
